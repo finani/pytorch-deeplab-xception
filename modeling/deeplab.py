@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
+from modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d as SBN2d
 from modeling.aspp import build_aspp
 from modeling.decoder import build_decoder
 from modeling.backbone import build_backbone
@@ -14,7 +14,7 @@ class DeepLab(nn.Module):
             output_stride = 8
 
         if sync_bn == True:
-            BatchNorm = SynchronizedBatchNorm2d
+            BatchNorm = SBN2d
         else:
             BatchNorm = nn.BatchNorm2d
 
@@ -34,7 +34,7 @@ class DeepLab(nn.Module):
 
     def freeze_bn(self):
         for m in self.modules():
-            if isinstance(m, SynchronizedBatchNorm2d):
+            if isinstance(m, SBN2d):
                 m.eval()
             elif isinstance(m, nn.BatchNorm2d):
                 m.eval()
@@ -49,7 +49,7 @@ class DeepLab(nn.Module):
                             if p.requires_grad:
                                 yield p
                 else:
-                    if isinstance(m[1], nn.Conv2d) or isinstance(m[1], SynchronizedBatchNorm2d) \
+                    if isinstance(m[1], nn.Conv2d) or isinstance(m[1], SBN2d) \
                             or isinstance(m[1], nn.BatchNorm2d):
                         for p in m[1].parameters():
                             if p.requires_grad:
@@ -65,7 +65,7 @@ class DeepLab(nn.Module):
                             if p.requires_grad:
                                 yield p
                 else:
-                    if isinstance(m[1], nn.Conv2d) or isinstance(m[1], SynchronizedBatchNorm2d) \
+                    if isinstance(m[1], nn.Conv2d) or isinstance(m[1], SBN2d) \
                             or isinstance(m[1], nn.BatchNorm2d):
                         for p in m[1].parameters():
                             if p.requires_grad:

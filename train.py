@@ -24,7 +24,7 @@ class Trainer(object):
         # Define Tensorboard Summary
         self.summary = TensorboardSummary(self.saver.experiment_dir)
         self.writer = self.summary.create_summary()
-        
+
         # Define Dataloader
         kwargs = {'num_workers': args.workers, 'pin_memory': True}
         self.train_loader, self.val_loader, self.test_loader, self.nclass = make_data_loader(args, **kwargs)
@@ -56,7 +56,7 @@ class Trainer(object):
             weight = None
         self.criterion = SegmentationLosses(weight=weight, cuda=args.cuda).build_loss(mode=args.loss_type)
         self.model, self.optimizer = model, optimizer
-        
+
         # Define Evaluator
         self.evaluator = Evaluator(self.nclass)
         # Define lr scheduler
@@ -94,28 +94,50 @@ class Trainer(object):
         train_loss = 0.0
         self.model.train()
         tbar = tqdm(self.train_loader)
-        num_img_tr = len(self.train_loader)
-        for i, sample in enumerate(tbar):
-            image, target = sample['image'], sample['label']
-            if self.args.cuda:
-                image, target = image.cuda(), target.cuda()
-            self.scheduler(self.optimizer, i, epoch, self.best_pred)
-            self.optimizer.zero_grad()
-            output = self.model(image)
-            loss = self.criterion(output, target)
-            loss.backward()
-            self.optimizer.step()
-            train_loss += loss.item()
-            tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
-            self.writer.add_scalar('train/total_loss_iter', loss.item(), i + num_img_tr * epoch)
+        if self.args.dataset == 'recyclables':
+            num_img_tr = len(self.train_loader)
+            for step, (images, masks, _) in enumerate(tbar):
+                images = torch.stack(images)       # (batch, channel, height, width)
+                masks = torch.stack(masks).long()  # (batch, channel, height, width)
+                image, target = images.to("cuda"), masks.to("cuda")
+                self.scheduler(self.optimizer, step, epoch, self.best_pred)
+                self.optimizer.zero_grad()
+                output = self.model(image)
+                loss = self.criterion(output, target)
+                loss.backward()
+                self.optimizer.step()
+                train_loss += loss.item()
+                tbar.set_description('Train loss: %.3f' % (train_loss / (step + 1)))
+                self.writer.add_scalar('train/total_loss_iter', loss.item(), step + num_img_tr * epoch)
 
-            # Show 10 * 3 inference results each epoch
-            if i % (num_img_tr // 10) == 0:
-                global_step = i + num_img_tr * epoch
-                self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)
+                # Show 10 * 3 inference results each epoch
+                if step % (num_img_tr // 10) == 0:
+                    global_step = step + num_img_tr * epoch
+                    self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)
+
+        else:
+            num_img_tr = len(self.train_loader)
+            for step, sample in enumerate(tbar):
+                image, target = sample['image'], sample['label']
+                if self.args.cuda:
+                    image, target = image.cuda(), target.cuda()
+                self.scheduler(self.optimizer, step, epoch, self.best_pred)
+                self.optimizer.zero_grad()
+                output = self.model(image)
+                loss = self.criterion(output, target)
+                loss.backward()
+                self.optimizer.step()
+                train_loss += loss.item()
+                tbar.set_description('Train loss: %.3f' % (train_loss / (step + 1)))
+                self.writer.add_scalar('train/total_loss_iter', loss.item(), step + num_img_tr * epoch)
+
+                # Show 10 * 3 inference results each epoch
+                if step % (num_img_tr // 10) == 0:
+                    global_step = step + num_img_tr * epoch
+                    self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)
 
         self.writer.add_scalar('train/total_loss_epoch', train_loss, epoch)
-        print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
+        print('[Epoch: %d, numImages: %5d]' % (epoch, step * self.args.batch_size + image.data.shape[0]))
         print('Loss: %.3f' % train_loss)
 
         if self.args.no_val:
@@ -132,22 +154,38 @@ class Trainer(object):
     def validation(self, epoch):
         self.model.eval()
         self.evaluator.reset()
-        tbar = tqdm(self.val_loader, desc='\r')
         test_loss = 0.0
-        for i, sample in enumerate(tbar):
-            image, target = sample['image'], sample['label']
-            if self.args.cuda:
-                image, target = image.cuda(), target.cuda()
-            with torch.no_grad():
-                output = self.model(image)
-            loss = self.criterion(output, target)
-            test_loss += loss.item()
-            tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
-            pred = output.data.cpu().numpy()
-            target = target.cpu().numpy()
-            pred = np.argmax(pred, axis=1)
-            # Add batch sample into evaluator
-            self.evaluator.add_batch(target, pred)
+        tbar = tqdm(self.val_loader, desc='\r')
+        if self.args.dataset == 'recyclables':
+            for step, (images, masks, _) in enumerate(tbar):
+                images = torch.stack(images)       # (batch, channel, height, width)
+                masks = torch.stack(masks).long()  # (batch, channel, height, width)
+                image, target = images.to("cuda"), masks.to("cuda")
+                with torch.no_grad():
+                    output = self.model(image)
+                loss = self.criterion(output, target)
+                test_loss += loss.item()
+                tbar.set_description('Test loss: %.3f' % (test_loss / (step + 1)))
+                pred = output.data.cpu().numpy()
+                target = target.cpu().numpy()
+                pred = np.argmax(pred, axis=1)
+                # Add batch sample into evaluator
+                self.evaluator.add_batch(target, pred)
+        else:
+            for step, sample in enumerate(tbar):
+                image, target = sample['image'], sample['label']
+                if self.args.cuda:
+                    image, target = image.cuda(), target.cuda()
+                with torch.no_grad():
+                    output = self.model(image)
+                loss = self.criterion(output, target)
+                test_loss += loss.item()
+                tbar.set_description('Test loss: %.3f' % (test_loss / (step + 1)))
+                pred = output.data.cpu().numpy()
+                target = target.cpu().numpy()
+                pred = np.argmax(pred, axis=1)
+                # Add batch sample into evaluator
+                self.evaluator.add_batch(target, pred)
 
         # Fast test during the training
         Acc = self.evaluator.Pixel_Accuracy()
@@ -160,7 +198,7 @@ class Trainer(object):
         self.writer.add_scalar('val/Acc_class', Acc_class, epoch)
         self.writer.add_scalar('val/fwIoU', FWIoU, epoch)
         print('Validation:')
-        print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
+        print('[Epoch: %d, numImages: %5d]' % (epoch, step * self.args.batch_size + image.data.shape[0]))
         print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc, Acc_class, mIoU, FWIoU))
         print('Loss: %.3f' % test_loss)
 
@@ -177,21 +215,21 @@ class Trainer(object):
 
 def main():
     parser = argparse.ArgumentParser(description="PyTorch DeeplabV3Plus Training")
-    parser.add_argument('--backbone', type=str, default='resnet',
+    parser.add_argument('--backbone', type=str, default='xception',
                         choices=['resnet', 'xception', 'drn', 'mobilenet'],
                         help='backbone name (default: resnet)')
     parser.add_argument('--out-stride', type=int, default=16,
                         help='network output stride (default: 8)')
-    parser.add_argument('--dataset', type=str, default='pascal',
-                        choices=['pascal', 'coco', 'cityscapes'],
+    parser.add_argument('--dataset', type=str, default='recyclables',
+                        choices=['pascal', 'coco', 'cityscapes', 'recyclables'],
                         help='dataset name (default: pascal)')
     parser.add_argument('--use-sbd', action='store_true', default=True,
                         help='whether to use SBD dataset (default: True)')
     parser.add_argument('--workers', type=int, default=4,
                         metavar='N', help='dataloader threads')
-    parser.add_argument('--base-size', type=int, default=513,
+    parser.add_argument('--base-size', type=int, default=512,
                         help='base image size')
-    parser.add_argument('--crop-size', type=int, default=513,
+    parser.add_argument('--crop-size', type=int, default=512,
                         help='crop image size')
     parser.add_argument('--sync-bn', type=bool, default=None,
                         help='whether to use sync bn (default: auto)')
@@ -201,11 +239,11 @@ def main():
                         choices=['ce', 'focal'],
                         help='loss func type (default: ce)')
     # training hyper params
-    parser.add_argument('--epochs', type=int, default=None, metavar='N',
+    parser.add_argument('--epochs', type=int, default=10, metavar='N',
                         help='number of epochs to train (default: auto)')
     parser.add_argument('--start_epoch', type=int, default=0,
                         metavar='N', help='start epochs (default:0)')
-    parser.add_argument('--batch-size', type=int, default=None,
+    parser.add_argument('--batch-size', type=int, default=2,
                         metavar='N', help='input batch size for \
                                 training (default: auto)')
     parser.add_argument('--test-batch-size', type=int, default=None,
@@ -231,7 +269,7 @@ def main():
     parser.add_argument('--gpu-ids', type=str, default='0',
                         help='use which gpu to train, must be a \
                         comma-separated list of integers only (default=0)')
-    parser.add_argument('--seed', type=int, default=1, metavar='S',
+    parser.add_argument('--seed', type=int, default=21, metavar='S',
                         help='random seed (default: 1)')
     # checking point
     parser.add_argument('--resume', type=str, default=None,
@@ -243,7 +281,7 @@ def main():
                         help='finetuning on a different dataset')
     # evaluation option
     parser.add_argument('--eval-interval', type=int, default=1,
-                        help='evaluuation interval (default: 1)')
+                        help='evaluation interval (default: 1)')
     parser.add_argument('--no-val', action='store_true', default=False,
                         help='skip validation during training')
 
@@ -267,6 +305,7 @@ def main():
             'coco': 30,
             'cityscapes': 200,
             'pascal': 50,
+            'recyclables': 10,
         }
         args.epochs = epoches[args.dataset.lower()]
 
@@ -281,6 +320,7 @@ def main():
             'coco': 0.1,
             'cityscapes': 0.01,
             'pascal': 0.007,
+            'recyclables': 1e-04,
         }
         args.lr = lrs[args.dataset.lower()] / (4 * len(args.gpu_ids)) * args.batch_size
 

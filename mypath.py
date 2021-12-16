@@ -8,7 +8,9 @@ class Path(object):
         elif dataset == 'cityscapes':
             return '/path/to/datasets/cityscapes/'     # foler that contains leftImg8bit/
         elif dataset == 'coco':
-            return '/path/to/datasets/coco/'
+            return '/home/weebee/datasets/coco/'
+        elif dataset == 'recyclables':
+            return '/home/weebee/recyclables/baseline/input/'
         else:
             print('Dataset {} not available.'.format(dataset))
             raise NotImplementedError
